@@ -1,0 +1,257 @@
+<?php
+
+/**
+ * Syncs your user list with Mailchimp
+ *
+ * Copyright (C) 2011 by Stephen Tomlinson 
+ * 
+ * http://makeinteractive.co.uk
+ *
+ */
+ 
+require_once("MCAPI.class.php");
+
+class MailChimpSync extends WireData implements Module, ConfigurableModule {
+
+	/**
+	 * Basic information about module
+	 */
+	public static function getModuleInfo() {
+
+		return array(
+			'title' => 'MailChimp Sync', 
+			'version' => 100, 
+			'summary' => 'This module syncs your user list with MailChimp',
+			'singular' => true,
+			'autoload' => true, 
+			);
+	}
+	
+	/**
+	 * Default configuration for module
+	 *
+	 * This is based on Ryan's examples [used also in @apeisa's AdminBar, for instance]
+	 */
+	protected static $defaultConfigData = array(
+		'apiKey' => false,
+		'listId'	=> false,
+		'email' =>	false,
+		'fname'	=>	false,
+		'lname'	=>	false,
+		'otherFields'	=>	false,
+	);
+	
+	/**
+	 * Populate the default config data
+	 *
+	 */
+	public function ___construct() {
+	   foreach(self::$defaultConfigData as $key => $value) {
+		   $this->$key = $value;
+		   $data[$key] = $value;
+	   }
+	}
+
+	/**
+	 * Initialize the module
+	 *
+	 */
+	public function init() {
+		wire('pages')->addHookAfter('saveReady', $this, 'hookUserSave');	
+	}
+	
+	/**
+	 * To be run whenever a user is saved
+	 *
+	 */
+	public function hookUserSave(HookEvent $event) {
+
+		$user = $event->arguments[0];
+    
+		// Only handle users
+		if(!$user instanceof User) return;
+    
+    // If the user is new, add them to the list
+    if($user->isNew()) {
+      $this->addSubscriber($user); 
+      return true;
+    }
+		
+    // If they change their email update them
+		if($user->isChanged()) $this->updateSubscriber($user);
+    
+	}
+	
+	/**
+	 * Sync the user with the list. If they do not have the correct role, no action is taken
+	 *
+	 */
+	public function updateSubscriber(User $user) {
+	
+		$api = new MCAPI($this->apiKey);
+    
+    // Groups
+    
+    $groupsArr = array();
+    foreach($user->roles as $role) {
+      $groupsArr[] = $role->name;
+    }
+    $groups = implode(",", $groupsArr);
+    
+    // Check if the groupings and groups exist and if not, add them
+    
+    $mcGroupings = $api->listInterestGroupings($this->listId);
+    if(!array_search('Role', $mcGroupings)) $this->setupGrouping();
+					
+		// Update the user with the mailchimp API
+    
+		$merge_vars = array(
+      "FNAME" => $user->get($this->fname),
+      "LNAME" => $user->get($this->sname),
+      "GROUPINGS" => array(array('name' => 'Role', 'groups' => $groups))
+    );
+		
+		$double_optin = false;
+		$update_existing = true;
+		$replace_interests = true;
+		$send_welcome = false;
+		
+		$retval = $api->listSubscribe($this->listId, $user->email, $merge_vars, 'html', $double_optin, $update_existing, $replace_interests, $send_welcome);
+		
+		// Report any errors
+    
+		if ($api->errorCode){
+      $this->message("MailChimp: ({$api->errorCode}) {$api->errorMessage}");
+		} else {
+		  $this->message("Updated with MailChimp");
+		}
+    
+    return $retval;
+		
+	}
+  
+	public function addSubscriber(User $user) {
+	
+		return $this->updateSubscriber($user);
+		
+	}
+  
+	/**
+	 * Import the system's Roles into a MailChimp grouping under the list
+	 *
+	 */
+  public function setupGrouping() {
+    
+    $api = new MCAPI($this->apiKey);
+    
+    $groups = array();
+    foreach($this->roles as $role) {
+      $groups[] = $role->name;
+    }
+    
+    return $api->listInterestGroupingAdd($this->listId, 'Role', 'hidden', $groups);
+    
+  }
+	
+	/**
+	 * Sync all users with the list. Those not in the role are removed from the list if they appear
+	 *
+	 */
+	public function ___syncAll($users) {
+	
+		foreach($users as $user) {
+		
+			// Check the user is in the defined group
+			if(!$user->hasRole($this->role)) {
+			
+				// User is not in the group for the list, remove them
+				$api = new MCAPI($this->apiKey);
+				$api->listUnsubscribe($this->listId, $user->email, true, false, false);
+				
+			} else {
+				
+				$this->___syncUser($user);
+							
+			}
+		
+		}
+		
+	}
+	
+	/**
+	 * Receive unsubscribe details from MailChimp
+	 *
+	 */
+	public function processWebhook() {		
+		
+		if(!$this->input->post->type == "unsubscribe") return;
+		
+		$data = $this->input->post->data;
+		$email = $sanitizer->email($data['email']);
+		
+		$user = wire('users')->find("{$this->email}=$email");
+		
+		if($user->id && $user->get($this->flag)) {
+			$user->set($this->flag,false);
+			$user->save();
+		}
+		
+	}
+	
+	/**
+	 * Store details in the backend
+	 *
+	 */
+	static public function getModuleConfigInputfields(array $data) {
+
+		$inputfields = new InputfieldWrapper();
+		$inputfields->description = "Enter the details of your PayPal account below";
+		
+		$data = array_merge(self::$defaultConfigData, $data);
+		
+		$modules = wire('modules');
+
+		$f = $modules->get('InputfieldText');
+		$f->name = 'apiKey';
+		$f->label = "API key";
+		$f->attr('value', $data[$f->name]);
+		$inputfields->add($f);
+		
+		$f = $modules->get('InputfieldText');
+		$f->name =  'listId';
+		$f->label = "List ID";
+		$f->attr('value', $data[$f->name]);
+		$inputfields->add($f);
+		
+		$f = $modules->get('InputfieldText');
+		$f->name =  'email';
+		$f->label = "Email field";
+		$f->attr('value', $data[$f->name]);
+		$inputfields->add($f);
+		
+		$f = $modules->get('InputfieldText');
+		$f->name =  'fname';
+		$f->label = "First name field";
+		$f->description = "The field used to store the user's first name";
+		$f->attr('value', $data[$f->name]);
+		$inputfields->add($f);
+		
+		$f = $modules->get('InputfieldText');
+		$f->name =  'sname';
+		$f->label = "Surname field";
+		$f->description = "The field used to store the user's surname";
+		$f->attr('value', $data[$f->name]);
+		$inputfields->add($f);
+		
+		$f = $modules->get('InputfieldText');
+		$f->name =  'otherFields';
+		$f->label = "Additional fields";
+		$f->description = "Other user fields you would like to sync with MailChimp";
+		$f->attr('value', $data[$f->name]);
+		$inputfields->add($f);
+
+		return $inputfields;
+
+	}
+	
+}
