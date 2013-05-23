@@ -57,14 +57,14 @@ class MailChimpSync extends WireData implements Module, ConfigurableModule {
 	 *
 	 */
 	public function init() {
-		wire('pages')->addHookAfter('saveReady', $this, 'hookUserSave');	
+		wire('pages')->addHookAfter('saveReady', $this, 'hookAfterSaveReady');	
 	}
 	
 	/**
 	 * To be run whenever a user is saved
 	 *
 	 */
-	public function hookUserSave(HookEvent $event) {
+	public function hookAfterSaveReady(HookEvent $event) {
 
 		$user = $event->arguments[0];
     
@@ -77,7 +77,7 @@ class MailChimpSync extends WireData implements Module, ConfigurableModule {
       return true;
     }
 		
-    // If they change their email update them
+    // If they have changed their details upate them (we should only check the required fields here!)
 		if($user->isChanged()) $this->updateSubscriber($user);
     
 	}
@@ -90,33 +90,40 @@ class MailChimpSync extends WireData implements Module, ConfigurableModule {
 	
 		$api = new MCAPI($this->apiKey);
     
-    // Groups
+    // Setup PW Roles as groups on MailChimp
+    $this->setupGrouping();
     
+    // The user's roles
     $groupsArr = array();
     foreach($user->roles as $role) {
       $groupsArr[] = $role->name;
     }
     $groups = implode(",", $groupsArr);
-    
-    // Check if the groupings and groups exist and if not, add them
-    
-    $mcGroupings = $api->listInterestGroupings($this->listId);
-    if(!array_search('Role', $mcGroupings)) $this->setupGrouping();
-					
-		// Update the user with the mailchimp API
-    
+    			
+		// Set the fields to update
+    $email = $user->email;
 		$merge_vars = array(
       "FNAME" => $user->get($this->fname),
       "LNAME" => $user->get($this->sname),
       "GROUPINGS" => array(array('name' => 'Role', 'groups' => $groups))
     );
+    
+    // Has their email changed?
+    if($user->isChanged('email')) {
+      wire('pages')->uncacheAll();
+      $email = $this->pages->get($user->id)->email;
+      $merge_vars['NEW-EMAIL'] = $user->email;
+      $this->message("Old: $email, New: {$merge_vars['NEW-EMAIL']}");
+    }
 		
+    // Update the user with the mailchimp API
+    
 		$double_optin = false;
 		$update_existing = true;
 		$replace_interests = true;
 		$send_welcome = false;
 		
-		$retval = $api->listSubscribe($this->listId, $user->email, $merge_vars, 'html', $double_optin, $update_existing, $replace_interests, $send_welcome);
+		$retval = $api->listSubscribe($this->listId, $email, $merge_vars, 'html', $double_optin, $update_existing, $replace_interests, $send_welcome);
 		
 		// Report any errors
     
@@ -144,12 +151,50 @@ class MailChimpSync extends WireData implements Module, ConfigurableModule {
     
     $api = new MCAPI($this->apiKey);
     
-    $groups = array();
+    // Array of PW's groups
+    $roles = array();
     foreach($this->roles as $role) {
-      $groups[] = $role->name;
+      $roles[] = $role->name;
     }
     
-    return $api->listInterestGroupingAdd($this->listId, 'Role', 'hidden', $groups);
+    // Retrieve the groupings already setup in MailChimp 
+    $mcGroupings = $api->listInterestGroupings($this->listId);
+    
+    // Find the 'Role' grouping
+    $roleGroupingKey = false;
+    foreach ($mcGroupings as $key => $val) {
+      if ($val['name'] === 'Role') {
+        $roleGroupingKey = $key;
+        break;
+      }
+    }
+    
+    // Check that there is a grouping called Role - this is where we will store PW's roles
+    if(is_int($roleGroupingKey)) {
+      
+      // Make a simple array of existing groups
+      $existingGroups = array();
+      foreach($mcGroupings[$roleGroupingKey]['groups'] as $group) {
+        $existingGroups[] = $group['name'];
+      }
+      
+      // Add any roles not in the existing groups as new groups
+      $missingGroups = array_diff($roles, $existingGroups);
+      if(count($missingGroups)) {
+        foreach($missingGroups as $group) {
+          $api->listInterestGroupAdd($this->listId, $group, $roleGrouping['id']);
+        }
+      }
+      
+      
+    } else {
+      
+      $this->message("two");
+      
+      // If it doesn't exist create the Grouping and add all of the roles to it
+      $api->listInterestGroupingAdd($this->listId, 'Role', 'hidden', $roles);
+      
+    }  
     
   }
 	
