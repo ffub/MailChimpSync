@@ -187,8 +187,6 @@ class MailChimpSync extends WireData implements Module, ConfigurableModule {
       
     } else {
       
-      $this->message("two");
-      
       // If it doesn't exist create the Grouping and add all of the roles to it
       $api->listInterestGroupingAdd($this->listId, 'Role', 'hidden', $roles);
       
