@@ -18,5 +18,5 @@ From now on whenever one of the synchronised fields is changed, the user's detai
 Further improvements
 --------------------
 
-* Switch to scheduled updates. To avoid updating the whole list user's could be flagged as requiring an update when one of the relevant fields is updated. LazyCron or regular cron jobs would update these users on the list.
+* Switch to scheduled updates. To avoid updating the whole list users should be flagged as requiring an update when one of the relevant fields is updated. LazyCron or cron jobs would update flagged users.
 * Automatic creation of the list on MailCimp and initial import.
