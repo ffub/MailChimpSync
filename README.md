@@ -14,3 +14,9 @@ Currently the module will not automatically update a new list. To install the mo
 4. From a template run, `$modules->get('MailChimpSync')->syncAll($users);` to do the initial import. You can also run this from an interactive shell by loading the PW api and using the following, `wire('modules')->get('MailChimpSync')->syncAll(wire('users));`
 
 From now on whenever one of the synchronised fields is changed, the user's details will be updated on MailChimp. You can [segment your list](http://mailchimp.com/features/segmentation-and-groups/) based on the user's [role membership](http://processwire.com/api/user-access/roles/).
+
+Further improvements
+--------------------
+
+* Switch to scheduled updates. To avoid updating the whole list user's could be flagged as requiring an update when one of the relevant fields is updated. LazyCron or regular cron jobs would update these users on the list.
+* Automatic creation of the list on MailCimp and initial import.
